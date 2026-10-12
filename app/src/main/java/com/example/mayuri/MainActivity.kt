@@ -41,6 +41,17 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
+/** Runs a Firestore write and shows the error instead of crashing the app (e.g. permission denied, offline). */
+suspend fun runSafely(context: android.content.Context, block: suspend () -> Unit) {
+    try {
+        block()
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Toast.makeText(context, e.localizedMessage ?: "Something went wrong", Toast.LENGTH_LONG).show()
+    }
+}
+
 // --- COLORS ---
 val Saffron = Color(0xFFF4C430)
 val Gold = Color(0xFFFFD700)
@@ -99,16 +110,15 @@ fun RestaurantApp() {
     val orders = remember { mutableStateListOf<Order>() }
     val scope = rememberCoroutineScope()
     var isCheckingAuth by remember { mutableStateOf(true) }
+    val appContext = LocalContext.current
 
     // Auto-login and Data Sync
     LaunchedEffect(Unit) {
         val currentUser = FirebaseService.getCurrentUser()
         if (currentUser != null) {
-            // Re-verify role on app start
-            val result = FirebaseService.signIn(currentUser.email ?: "", "") // We use a dummy pass or separate fetch
-            // Better: Add a fetchRole function to FirebaseService
-            val role = if (currentUser.email?.lowercase()?.trim() == "owner@mayuri.com") "owner" else "user"
-            userRole = role
+            // Role comes from Firestore only. (This used to call signIn() with an empty password - which can
+            // never succeed - and then decide the role from the e-mail address.) Least privilege if unreadable.
+            userRole = FirebaseService.fetchRole(currentUser.uid) ?: "user"
         }
         isCheckingAuth = false
     }
@@ -122,7 +132,7 @@ fun RestaurantApp() {
                 }
             }
             launch {
-                FirebaseService.getOrdersFlow().collectLatest { items ->
+                FirebaseService.getOrdersFlow(allOrders = userRole == "owner").collectLatest { items ->
                     orders.clear()
                     orders.addAll(items)
                 }
@@ -162,7 +172,7 @@ fun RestaurantApp() {
                             composable("dashboard") { OwnerDashboard(navController, orders, menuItems) }
                             composable("owner_orders") { OwnerOrdersScreen(orders) { id, status ->
                                 scope.launch {
-                                    FirebaseService.updateOrderStatus(id, status)
+                                    runSafely(appContext) { FirebaseService.updateOrderStatus(id, status) }
                                 }
                             }}
                             composable("owner_menu") { OwnerMenuScreen(menuItems) }
@@ -224,6 +234,7 @@ fun AuthScreen(onLogin: (String) -> Unit) {
                     Text(if(isSignUp) "Already have an account? Sign In" else "New here? Create account", fontSize = 12.sp, color = Saffron)
                 }
                 
+                if (BuildConfig.DEBUG) { // demo logins (with a published password) must not ship in release builds
                 Divider(Modifier.padding(vertical = 16.dp), color = Color.Gray)
                 
                 Text("Demo Accounts", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Gold, modifier = Modifier.padding(bottom = 8.dp))
@@ -239,6 +250,7 @@ fun AuthScreen(onLogin: (String) -> Unit) {
                         modifier = Modifier.weight(1f),
                         border = BorderStroke(1.dp, Gold)
                     ) { Text("Owner Demo", fontSize = 11.sp, color = Gold) }
+                }
                 }
             }
         }
@@ -338,6 +350,7 @@ fun CartScreen(navController: NavHostController, cart: MutableMap<String, Int>, 
 @Composable
 fun PaymentScreen(navController: NavHostController, cart: MutableMap<String, Int>, menuItems: List<Dish>) {
     var step by remember { mutableStateOf(1) }
+    val context = LocalContext.current
     val cartItemsList = cart.mapNotNull { entry -> menuItems.find { it.id == entry.key }?.let { "${it.name} x${entry.value}" } }
     val subtotal = cart.entries.sumOf { entry -> menuItems.find { it.id == entry.key }?.price?.times(entry.value) ?: 0 }
 
@@ -359,17 +372,28 @@ fun PaymentScreen(navController: NavHostController, cart: MutableMap<String, Int
             }
             2 -> {
                 LaunchedEffect(Unit) {
+                    val user = FirebaseService.getCurrentUser()
                     val order = Order(
                         id = "ORD${System.currentTimeMillis()}",
                         date = java.text.SimpleDateFormat("MMM dd, yyyy - hh:mm a", java.util.Locale.getDefault()).format(java.util.Date()),
                         status = "pending",
                         items = cartItemsList,
                         total = (subtotal * 1.05 + 40).toInt(),
-                        customerName = FirebaseService.getCurrentUser()?.email ?: "Guest",
-                        address = "Saved Address"
+                        customerName = user?.email ?: "Guest",
+                        address = "Saved Address",
+                        userId = user?.uid ?: ""
                     )
-                    FirebaseService.placeOrder(order)
-                    delay(2000); step = 3
+                    try {
+                        FirebaseService.placeOrder(order)
+                        cart.clear() // otherwise pressing Back from the success screen let the same cart be ordered again
+                        step = 3
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        // This used to crash the app (uncaught in LaunchedEffect) and showed "Successful!" regardless
+                        Toast.makeText(context, "Could not place the order: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                        step = 1
+                    }
                 }
                 Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                     CircularProgressIndicator(color = Saffron)
@@ -389,8 +413,8 @@ fun PaymentScreen(navController: NavHostController, cart: MutableMap<String, Int
 
 @Composable
 fun CustomerOrdersScreen(orders: List<Order>) {
-    val email = FirebaseService.getCurrentUser()?.email
-    val myOrders = orders.filter { it.customerName == email }.reversed()
+    val uid = FirebaseService.getCurrentUser()?.uid
+    val myOrders = orders.filter { it.userId == uid }.reversed()
     Column(Modifier.fillMaxSize().padding(16.dp)) {
         Text("My Orders", fontSize = 32.sp, color = Saffron, fontWeight = FontWeight.Bold)
         LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(top = 16.dp)) {
@@ -428,7 +452,7 @@ fun ProfileScreen(isOwner: Boolean = false, onLogout: () -> Unit) {
         Spacer(Modifier.height(40.dp))
         
         if (isOwner) {
-            Button(onClick = { scope.launch { FirebaseService.seedDemoData(); Toast.makeText(context, "Menu Seeded!", Toast.LENGTH_SHORT).show() } }, modifier = Modifier.fillMaxWidth()) {
+            Button(onClick = { scope.launch { runSafely(context) { FirebaseService.seedDemoData(); Toast.makeText(context, "Menu Seeded!", Toast.LENGTH_SHORT).show() } } }, modifier = Modifier.fillMaxWidth()) {
                 Text("Seed Demo Menu")
             }
             Spacer(Modifier.height(16.dp))
@@ -498,9 +522,10 @@ fun OwnerMenuScreen(menuData: SnapshotStateList<Dish>) {
     var editingDish by remember { mutableStateOf<Dish?>(null) }
     var showingAddDialog by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
 
     if (editingDish != null) EditDishDialog(editingDish!!, { editingDish = null }, { updated ->
-        scope.launch { FirebaseService.updateDish(updated); editingDish = null }
+        scope.launch { runSafely(context) { FirebaseService.updateDish(updated) }; editingDish = null }
     })
     if (showingAddDialog) AddDishDialog(menuData) { showingAddDialog = false }
 
@@ -519,7 +544,7 @@ fun OwnerMenuScreen(menuData: SnapshotStateList<Dish>) {
                             Text("₹${dish.price}", color = Saffron, fontSize = 14.sp)
                         }
                         IconButton(onClick = { editingDish = dish }) { Icon(Icons.Default.Edit, null, tint = Gold) }
-                        IconButton(onClick = { scope.launch { FirebaseService.deleteDish(dish.id) } }) { Icon(Icons.Default.Delete, null, tint = Color.Red) }
+                        IconButton(onClick = { scope.launch { runSafely(context) { FirebaseService.deleteDish(dish.id) } } }) { Icon(Icons.Default.Delete, null, tint = Color.Red) }
                     }
                 }
             }
@@ -535,11 +560,12 @@ fun AddDishDialog(menuData: SnapshotStateList<Dish>, onDismiss: () -> Unit) {
     var price by remember { mutableStateOf("") }
     var emoji by remember { mutableStateOf("🍛") }
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     AlertDialog(onDismissRequest = onDismiss, confirmButton = {
         Button(onClick = {
             scope.launch {
-                val new = Dish("", name, emoji, "main", true, "", price.toIntOrNull() ?: 0)
-                FirebaseService.addDish(new); onDismiss()
+                val new = Dish("", name.trim(), emoji, "main", true, "", price.toIntOrNull() ?: 0)
+                runSafely(context) { FirebaseService.addDish(new) }; onDismiss()
             }
         }, enabled = name.isNotBlank() && price.isNotBlank()) { Text("Add Dish") }
     }, title = { Text("New Dish") }, text = {

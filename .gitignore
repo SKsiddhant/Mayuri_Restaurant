@@ -2,3 +2,12 @@
 /.gradle/
 /app/build/
 /build/
+
+# Machine-specific / IDE files
+local.properties
+.idea/
+*.iml
+
+# Web prototype
+node_modules/
+dist/
