@@ -11,3 +11,6 @@ local.properties
 # Web prototype
 node_modules/
 dist/
+
+# Firebase client config: download your own (see app/google-services.json.example)
+app/google-services.json

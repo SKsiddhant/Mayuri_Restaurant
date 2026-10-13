@@ -8,7 +8,7 @@ A restaurant ordering app with two parts:
 ## Android setup
 
 1. Open the project in Android Studio (it creates `local.properties` for you; that file is git-ignored).
-2. `app/google-services.json` is the Firebase client configuration. Replace it with the one from **your** Firebase project if you fork this. Restrict its API key to the app's package name / SHA-1 in Google Cloud Console.
+2. `app/google-services.json` (git-ignored) is the Firebase client configuration: download it from **your** Firebase project (`app/google-services.json.example` shows the shape). Restrict its API key to the app's package name / SHA-1 in Google Cloud Console.
 3. In the Firebase console enable **Authentication -> Email/Password** and create **Firestore**.
 4. Deploy the security rules in `firestore.rules`:
    ```bash
