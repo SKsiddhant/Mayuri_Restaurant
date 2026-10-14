@@ -1,7 +1,9 @@
 plugins {
-    id("com.google.gms.google-services") version "4.4.4"
-    id("com.android.application") version "9.1.0"
-    id("org.jetbrains.kotlin.android") version "2.2.10"
+    // Versions are declared once, in the root build.gradle.kts. Repeating them here makes Gradle fail with
+    // "Plugin ... is already on the classpath with an unknown version".
+    id("com.google.gms.google-services")
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.firebase.crashlytics")
 }
@@ -33,16 +35,21 @@ android {
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
     }
-    kotlinOptions {
-        jvmTarget = "1.8"
-    }
     buildFeatures {
         compose = true
+        buildConfig = true  // BuildConfig.DEBUG gates the demo logins
     }
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
+    }
+}
+
+// `android { kotlinOptions { } }` is an error from Kotlin 2.2; compilerOptions replaces it.
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_1_8)
     }
 }
 

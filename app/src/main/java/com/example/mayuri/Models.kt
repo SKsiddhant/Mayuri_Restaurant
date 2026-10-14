@@ -19,5 +19,6 @@ data class Order(
     val items: List<String> = emptyList(), 
     val total: Int = 0, 
     val customerName: String = "",
-    val address: String = ""
+    val address: String = "",
+    val userId: String = ""
 )
