@@ -14,3 +14,8 @@ dist/
 
 # Firebase client config: download your own (see app/google-services.json.example)
 app/google-services.json
+
+# Release signing material: never commit
+*.jks
+*.keystore
+keystore.properties
